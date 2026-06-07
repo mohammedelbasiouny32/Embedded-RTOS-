@@ -1,0 +1,68 @@
+/* ── Standard headers ───────────────────────────────────────────────────── */
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
+
+/* ── FreeRTOS headers ───────────────────────────────────────────────────── */
+#include "FreeRTOS.h"
+#include "task.h"
+#include "queue.h"
+#include "timers.h"
+#include "semphr.h"
+
+/* =========================================================================
+ * PHASE 1: ENVIRONMENT SETUP & DATA STRUCTURES (MEMBER 1)
+ * ========================================================================= */
+
+/* ── Global Parameter Defines ───────────────────────────────────────────── */
+#define L1          500u       /* Min packet length (bytes) */
+#define L2          1500u      /* Max packet length (bytes) */
+#define T1_MS       100u       /* Min inter-arrival time (ms) */
+#define T2_MS       200u       /* Max inter-arrival time (ms) */
+#define K_BYTES     40u        /* ACK packet size (bytes) */
+#define C_BITSEC    100000UL   /* Link capacity (bits/sec) */
+#define D_MS        5u         /* Propagation delay (ms) */
+#define P_ACK       0.01f      /* ACK drop probability */
+
+/* ── Parametric Arrays for 16 Runs ──────────────────────────────────────── */
+/* Drop probabilities as float array (0.01, 0.02, 0.04, 0.08) */
+const float P_drop_array[4] = {0.01f, 0.02f, 0.04f, 0.08f};
+
+/* Timeout values in ms (150, 175, 200, 225) */
+const uint32_t Tout_ms_array[4] = {150u, 175u, 200u, 225u};
+
+/* ── Data Structures ────────────────────────────────────────────────────── */
+
+/* 1. DATA Packet Structure (Must be exactly L2 bytes max) */
+typedef struct __attribute__((packed)) {
+    uint8_t  sender_id;  /* 1 byte */
+    uint8_t  dest_id;    /* 1 byte */
+    uint16_t length;     /* 2 bytes */
+    uint32_t seq_num;    /* 4 bytes */
+    /* Header total = 8 bytes */
+    uint8_t  payload[L2 - 8u]; /* Max payload = 1492 bytes */
+} Packet_t;
+
+/* 2. ACK Packet Structure (Must be exactly K=40 bytes total) */
+typedef struct __attribute__((packed)) {
+    uint8_t  src_node;   /* 1 byte */
+    uint8_t  dest_node;  /* 1 byte */
+    uint32_t seq_num;    /* 4 bytes */
+    /* Padding to reach K=40 bytes (40 - 6 = 34 bytes) */
+    uint8_t  padding[K_BYTES - 6u]; 
+} ACK_t;
+
+/* ── Helper Functions ───────────────────────────────────────────────────── */
+
+/* Returns a float uniform random number in [min, max] */
+float rand_uniform(float min, float max) {
+    float scale = rand() / (float) RAND_MAX; 
+    return min + scale * (max - min);
+}
+
+/* Returns 1 (true) with probability p (for simulating packet drops) */
+uint8_t rand_bool(float p) {
+    float r = rand() / (float) RAND_MAX;
+    return (r < p) ? 1 : 0;
+}
