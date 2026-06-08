@@ -37,14 +37,14 @@
 
 /* Parametric Execution Arrays (4 Drop Percentages: 1%, 2%, 4%, 8%) */
 static const uint32_t P_drop_percent_array[4] = {1u, 2u, 4u, 8u};
-static const char* P_drop_strings[4]       = {"0.01", "0.02", "0.04", "0.08"};
+static const char* P_drop_strings[4]          = {"0.01", "0.02", "0.04", "0.08"};
 
 /* Active simulation parameters modified dynamically by the Outer Loop */
 static volatile uint32_t current_P_drop_percent = 1u;
 static volatile uint32_t current_Tout           = 150u; /* Locked at 150ms */
 
 /* Unified State Tracking across Test Configurations */
-static volatile uint32_t g_packet_seq          = 0UL;
+static volatile uint32_t g_packet_seq           = 0UL;
 static volatile uint32_t g_last_received_seq    = UINT32_MAX;
 
 /* Results storage arrays for final presentation in the Report */
@@ -278,12 +278,13 @@ void receiverTask(void *pvParams) {
  * SECTION 6 – AUTOMATION ENGINE (Pristine Environment Controls)
  * ═══════════════════════════════════════════════════════════════════════════ */
 void resetStats(void) {
-    vTaskSuspend(hPkgGen);
-    vTaskSuspend(hSender);
-    vTaskSuspend(hAckHandler);
-    vTaskSuspend(hDataLink);
-    vTaskSuspend(hAckLink);
-    vTaskSuspend(hReceiver);
+    /* Delete tasks if they exist to completely reset their state and break deadlocks */
+    if (hPkgGen != NULL) { vTaskDelete(hPkgGen); hPkgGen = NULL; }
+    if (hSender != NULL) { vTaskDelete(hSender); hSender = NULL; }
+    if (hAckHandler != NULL) { vTaskDelete(hAckHandler); hAckHandler = NULL; }
+    if (hDataLink != NULL) { vTaskDelete(hDataLink); hDataLink = NULL; }
+    if (hAckLink != NULL) { vTaskDelete(hAckLink); hAckLink = NULL; }
+    if (hReceiver != NULL) { vTaskDelete(hReceiver); hReceiver = NULL; }
 
     Packet_t *pkt; ACK_t *ack;
     while (xQueueReceive(xGeneratedQueue, &pkt, 0) == pdTRUE) { vPortFree(pkt); }
@@ -295,6 +296,9 @@ void resetStats(void) {
     xSemaphoreTake(xSenderSem, 0);
     xSemaphoreTake(xRunDoneSem, 0);
 
+    /* Stop the timer */
+    xTimerStop(xToutTimer, 0);
+
     /* Reset global runtime variables entirely */
     g_packet_seq        = 0UL;
     g_last_received_seq = UINT32_MAX;
@@ -304,13 +308,16 @@ void resetStats(void) {
     gTotalAttempts      = 0UL;
     gStartTick          = 0u;
     gEndTick            = 0u;
+    current_expected_ack_seq = 0UL;
+    xAckReceived        = pdFALSE;
 
-    vTaskResume(hReceiver);
-    vTaskResume(hAckLink);
-    vTaskResume(hDataLink);
-    vTaskResume(hAckHandler);
-    vTaskResume(hSender);
-    vTaskResume(hPkgGen);
+    /* Recreate the simulation tasks fresh */
+    xTaskCreate(pkgGenTask,     "PktGenTask", STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 2u), &hPkgGen);
+    xTaskCreate(senderTask,     "SenderTask", STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 3u), &hSender);
+    xTaskCreate(ackHandlerTask, "AckHandler", STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 3u), &hAckHandler);
+    xTaskCreate(dataLinkTask,   "DataLink",   STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 2u), &hDataLink);
+    xTaskCreate(ackLinkTask,    "AckLink",    STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 2u), &hAckLink);
+    xTaskCreate(receiverTask,   "Receiver",   STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 2u), &hReceiver);
 }
 
 void mainExperimentTask(void *pvParams) {
@@ -399,13 +406,9 @@ int main(void) {
     xToutTimer = xTimerCreate("TimeoutTmr", pdMS_TO_TICKS(150), pdFALSE, NULL, vTimerCallback);
     configASSERT(xToutTimer != NULL);
 
-    xTaskCreate(pkgGenTask,     "PktGenTask", STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 2u), &hPkgGen);
-    xTaskCreate(senderTask,     "SenderTask", STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 3u), &hSender);
-    xTaskCreate(ackHandlerTask, "AckHandler", STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 3u), &hAckHandler);
-    xTaskCreate(dataLinkTask,   "DataLink",   STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 2u), &hDataLink);
-    xTaskCreate(ackLinkTask,    "AckLink",    STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 2u), &hAckLink);
-    xTaskCreate(receiverTask,   "Receiver",   STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 2u), &hReceiver);
-
+    /* Orchestration Task running above everyone else. 
+       NOTE: The simulation tasks (Sender, Receiver, etc.) are dynamically 
+       created by resetStats() inside mainExperimentTask() to prevent deadlocks. */
     xTaskCreate(mainExperimentTask, "MasterExec", STACK_SIZE_WORDS, NULL, (tskIDLE_PRIORITY + 4u), NULL);
 
     vTaskStartScheduler();
